@@ -634,6 +634,31 @@ async def vc_info_status(c: Client, m: Message):
         await msg.edit_msg(f"❌ VC Info error: <code>{e}</code>")
 
 
+@Altruix.register_on_cmd(
+    ["player", "vcplayer", "vcmusic"],
+    cmd_help={
+        "help": "Open the interactive Voice Chat controller with live playback and playback action buttons.",
+        "example": "player or player -basic",
+        "user_args": [
+            {
+                "arg": "basic",
+                "help": "Display text status without inline interactive buttons.",
+                "requires_input": False,
+            }
+        ],
+    },
+)
+async def vc_player_widget_cmd(c: Client, m: Message):
+    if "-basic" not in m.user_args and "-text" not in m.user_args:
+        try:
+            from Main.utils.inline_helper import send_inline_widget
+            if await send_inline_widget(c, m, "vc"):
+                return
+        except Exception:
+            pass
+    return await vc_info_status(c, m)
+
+
 # ==========================================
 # Interactive Inline VC Player Handlers
 # ==========================================
@@ -705,6 +730,9 @@ if getattr(Altruix, "bot", None):
 
     @Altruix.bot.on_callback_query(filters.regex(r"^vc_"))
     async def vc_callback_handler(c, cq):
+        if not is_authorized_cb(cq):
+            return await cq.answer("⛔ Access denied: You must be an authorized user to control playback.", alert=True)
+
         data = cq.data.decode("utf-8") if isinstance(cq.data, bytes) else str(cq.data)
         parts = data.split("_")
         action = parts[1]

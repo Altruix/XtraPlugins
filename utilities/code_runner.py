@@ -117,7 +117,75 @@ async def code_runner_cmd(c: Client, m: Message):
             f"<b>Output:</b>\n<pre>{html.escape(output)}</pre>"
         )
 
+        user_id = m.sender_id or 0
+        token = str(int(time.time() * 1000))[-8:]
+        _piston_cache[token] = (report, user_id)
+
+        if "-basic" not in m.user_args and "-text" not in m.user_args:
+            try:
+                from Main.utils.inline_helper import send_inline_widget
+                if await send_inline_widget(c, m, f"piston:{token}"):
+                    with suppress_error(msg="deleting status message"):
+                        await msg.delete()
+                    return
+            except Exception:
+                pass
+
         await msg.edit_msg(report)
 
     except Exception as e:
         await msg.edit_msg(f"❌ Execution error: <code>{e}</code>")
+
+
+# ==========================================
+# Interactive Inline Piston Code Runner
+# ==========================================
+
+_piston_cache = {}
+
+if getattr(Altruix, "bot", None):
+    import re
+    from telethon import custom
+    from Main.utils.custom_filters import filters
+    from Main.utils.inline_helper import is_owner
+    from Main.utils.suppress import suppress_error
+
+    @Altruix.bot.on_inline_query(filters.regex(r"^piston:(\w+)"))
+    async def piston_inline_query_handler(c, iq):
+        m = re.match(r"^piston:(\w+)", iq.text)
+        token = m.group(1) if m else ""
+        cached = _piston_cache.get(token)
+        if not cached:
+            return
+
+        report, user_id = cached
+        buttons = [
+            [
+                custom.Button.inline("🗑 Delete Output", f"piston_del:{user_id}".encode("utf-8")),
+            ]
+        ]
+        builder = iq.builder
+        res = builder.article(
+            title="⚡ Code Sandbox Output",
+            description="Sandbox execution result with delete button.",
+            text=report,
+            buttons=buttons,
+            parse_mode="html",
+        )
+        await iq.answer([res], cache_time=0)
+
+    @Altruix.bot.on_callback_query(filters.regex(r"^piston_del:(\d+)"))
+    async def piston_callback_handler(c, cq):
+        m = re.match(r"^piston_del:(\d+)", cq.data.decode("utf-8") if isinstance(cq.data, bytes) else str(cq.data))
+        owner_id = int(m.group(1)) if m else 0
+        if cq.sender_id != owner_id and not is_owner(cq.sender_id):
+            return await cq.answer("⛔ Access denied: Only the user who ran this code can delete its output.", alert=True)
+
+        try:
+            await cq.delete()
+        except (TypeError, Exception):
+            try:
+                await cq.edit("🗑 <i>Output deleted.</i>", buttons=None, parse_mode="html")
+            except Exception:
+                pass
+

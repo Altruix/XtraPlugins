@@ -94,7 +94,14 @@ async def generate_temp_mail(c: Client, m: Message):
     ["checkmail", "inbox"],
     cmd_help={
         "help": "Check incoming messages and verification OTPs for your active temporary email address.",
-        "example": "checkmail",
+        "example": "checkmail or checkmail -basic",
+        "user_args": [
+            {
+                "arg": "basic",
+                "help": "Force text output without inline interactive widget.",
+                "requires_input": False,
+            }
+        ],
     },
 )
 async def check_temp_mail(c: Client, m: Message):
@@ -110,6 +117,15 @@ async def check_temp_mail(c: Client, m: Message):
 
     address = doc.get("address")
     token = doc.get("token")
+
+    if "-basic" not in m.user_args and "-text" not in m.user_args:
+        try:
+            from Main.utils.inline_helper import send_inline_widget
+            if await send_inline_widget(c, m, f"tempmail:{user_id}"):
+                return
+        except Exception:
+            pass
+
     msg = await m.handle_message(f"📬 Checking inbox for <code>{address}</code>...")
 
     headers = {"Authorization": f"Bearer {token}"}
@@ -150,3 +166,110 @@ async def check_temp_mail(c: Client, m: Message):
         await msg.edit_msg(report)
     except Exception as e:
         await msg.edit_msg(f"❌ Inbox error: <code>{e}</code>")
+
+
+# ==========================================
+# Interactive Inline TempMail Handlers
+# ==========================================
+
+if getattr(Altruix, "bot", None):
+    import re
+    from telethon import custom
+    from Main.utils.custom_filters import filters
+    from Main.utils.inline_helper import is_owner
+
+    async def _render_tempmail_inbox(user_id: int):
+        col = _get_tempmail_col()
+        doc = await col.find_one({"user_id": user_id})
+        if not doc or not doc.get("token"):
+            text = (
+                "📬 <b>Temporary Disposable Mailbox</b>\n\n"
+                "<i>No active mailbox found. Generate one with:</i>\n"
+                "<code>.tempmail</code>"
+            )
+            buttons = [[custom.Button.inline("✖ Close", f"tmail_cls:{user_id}".encode("utf-8"))]]
+            return text, buttons
+
+        address = doc.get("address", "Unknown")
+        token = doc.get("token")
+        headers = {"Authorization": f"Bearer {token}"}
+        entries = []
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get("https://api.mail.tm/messages", headers=headers)
+                if res.status_code == 200:
+                    messages = res.json().get("hydra:member", [])
+                    for em in messages[:4]:
+                        sender = em.get("from", {}).get("address", "Unknown")
+                        subj = em.get("subject", "No Subject")
+                        entries.append(f"📨 <b>From:</b> <code>{sender}</code>\n<b>Subject:</b> {subj}")
+        except Exception:
+            pass
+
+        if not entries:
+            body = "📭 <i>Inbox is empty (no incoming OTPs yet).</i>"
+        else:
+            body = "\n\n".join(entries)
+
+        text = (
+            f"📬 <b>Active Disposable Inbox:</b>\n"
+            f"<code>{address}</code>\n\n"
+            f"{body}\n\n"
+            f"<i>• Tap address to copy. Tap Refresh to check for incoming codes.</i>"
+        )
+        buttons = [
+            [
+                custom.Button.inline("🔄 Refresh Inbox", f"tmail_ref:{user_id}".encode("utf-8")),
+                custom.Button.inline("🗑 Delete", f"tmail_del:{user_id}".encode("utf-8")),
+            ],
+            [custom.Button.inline("✖ Close", f"tmail_cls:{user_id}".encode("utf-8"))],
+        ]
+        return text, buttons
+
+    @Altruix.bot.on_inline_query(filters.regex(r"^tempmail:(\d+)"))
+    async def tempmail_inline_query_handler(c, iq):
+        m = re.match(r"^tempmail:(\d+)", iq.text)
+        user_id = int(m.group(1)) if m else iq.sender_id
+        text, buttons = await _render_tempmail_inbox(user_id)
+        builder = iq.builder
+        res = builder.article(
+            title="📬 Disposable Email Inbox",
+            description="View incoming verification emails & OTPs with live refresh button.",
+            text=text,
+            buttons=buttons,
+            parse_mode="html",
+        )
+        await iq.answer([res], cache_time=0)
+
+    @Altruix.bot.on_callback_query(filters.regex(r"^tmail_"))
+    async def tempmail_callback_handler(c, cq):
+        data = cq.data.decode("utf-8") if isinstance(cq.data, bytes) else str(cq.data)
+        parts = data.split(":")
+        action = parts[0]
+        user_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+
+        # Security check: only the owner of this mailbox can access/refresh/delete it!
+        if cq.sender_id != user_id and not is_owner(cq.sender_id):
+            return await cq.answer("⛔ Access denied: This temporary mailbox belongs to another user.", alert=True)
+
+        if action == "tmail_ref":
+            await cq.answer("🔄 Checking mail server...")
+        elif action == "tmail_del":
+            col = _get_tempmail_col()
+            await col.delete_one({"user_id": user_id})
+            await cq.answer("🗑 Mailbox removed from cache!", alert=True)
+        elif action == "tmail_cls":
+            try:
+                await cq.delete()
+            except (TypeError, Exception):
+                try:
+                    await cq.edit("<i>Mailbox panel closed.</i>", buttons=None, parse_mode="html")
+                except Exception:
+                    pass
+            return
+
+        text, buttons = await _render_tempmail_inbox(user_id)
+        try:
+            await cq.edit(text, buttons=buttons, parse_mode="html")
+        except Exception:
+            pass

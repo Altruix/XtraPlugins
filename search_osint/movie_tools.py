@@ -158,7 +158,8 @@ async def movie_search(c: Client, m: Message):
         if not poster_url and extra.get("image"):
             poster_url = extra.get("image")
 
-        page_link = f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else ""
+        page_link = f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else f"https://www.imdb.com/find?q={urllib.parse.quote(title)}"
+        trailer_link = f"https://www.youtube.com/results?search_query={urllib.parse.quote(title + ' ' + str(year) + ' trailer')}"
 
         caption = (
             f"🎬 <b>{title} ({year})</b>\n"
@@ -166,9 +167,28 @@ async def movie_search(c: Client, m: Message):
             f"{genre_str}"
             f"{director_str}"
             f"<b>• Starring:</b> {stars}\n\n"
-            f"<b>Synopsis:</b>\n<i>\"{plot}\"</i>\n\n"
-            f"🔗 <a href='{page_link}'>Full Cast & Crew on IMDb</a>"
+            f"<b>Synopsis:</b>\n<i>\"{plot}\"</i>\n"
         )
+
+        token = str(int(time.time() * 1000))[-8:]
+        _movie_cache[token] = {
+            "title": f"{title} ({year})",
+            "caption": caption,
+            "page_link": page_link,
+            "trailer_link": trailer_link,
+        }
+
+        if "-basic" not in m.user_args and "-text" not in m.user_args:
+            try:
+                from Main.utils.inline_helper import send_inline_widget
+                if await send_inline_widget(c, m, f"movie:{token}"):
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
 
         target_chat = m.chat_id or getattr(m.chat, "id", None)
         if poster_url and poster_url.startswith("http"):
@@ -182,6 +202,43 @@ async def movie_search(c: Client, m: Message):
         await msg.edit_msg(caption)
     except Exception as e:
         await msg.edit_msg(f"❌ Movie search error: <code>{e}</code>")
+
+
+# ==========================================
+# Interactive Inline Movie Card Handler
+# ==========================================
+
+_movie_cache = {}
+
+if getattr(Altruix, "bot", None):
+    import re
+    from telethon import custom
+    from Main.utils.custom_filters import filters
+
+    @Altruix.bot.on_inline_query(filters.regex(r"^movie:(\w+)"))
+    async def movie_inline_query_handler(c, iq):
+        m = re.match(r"^movie:(\w+)", iq.text)
+        token = m.group(1) if m else ""
+        item = _movie_cache.get(token)
+        if not item:
+            return
+
+        buttons = [
+            [
+                custom.Button.url("⭐ View on IMDb", item["page_link"]),
+                custom.Button.url("🎬 YouTube Trailer", item["trailer_link"]),
+            ]
+        ]
+        builder = iq.builder
+        res = builder.article(
+            title=item["title"],
+            description="Click to send rich movie card with IMDb & Trailer buttons.",
+            text=item["caption"],
+            buttons=buttons,
+            parse_mode="html",
+        )
+        await iq.answer([res], cache_time=0)
+
 
 
 @Altruix.register_on_cmd(

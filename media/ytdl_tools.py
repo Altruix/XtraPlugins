@@ -360,7 +360,23 @@ async def youtube_search_list(c: Client, m: Message):
             + "\n\n💡 <i>Tip: Copy any command above to download instantly!</i>"
         )
 
+        token = str(int(time.time() * 1000))[-8:]
+        _yts_cache[token] = entries[:5]
+
+        if "-basic" not in m.user_args and "-text" not in m.user_args:
+            try:
+                from Main.utils.inline_helper import send_inline_widget
+                if await send_inline_widget(c, m, f"yts:{token}"):
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
         await msg.edit_msg(report, disable_web_page_preview=True)
+
 
     except Exception as e:
         await msg.edit_msg(f"❌ YouTube search error: <code>{e}</code>")
@@ -429,3 +445,67 @@ async def youtube_info_inspect(c: Client, m: Message):
 
     except Exception as e:
         await msg.edit_msg(f"❌ YouTube info error: <code>{e}</code>")
+
+
+# ==========================================
+# Interactive Inline YouTube Search Handlers
+# ==========================================
+
+_yts_cache = {}
+
+if getattr(Altruix, "bot", None):
+    import re
+    from telethon import custom
+    from Main.utils.custom_filters import filters
+
+    @Altruix.bot.on_inline_query(filters.regex(r"^yts:(\w+)"))
+    async def yts_inline_query_handler(c, iq):
+        m = re.match(r"^yts:(\w+)", iq.text)
+        token = m.group(1) if m else ""
+        entries = _yts_cache.get(token, [])
+        if not entries:
+            return
+
+        builder = iq.builder
+        results = []
+        for it in entries:
+            vid_id = it.get("id")
+            title = it.get("title", "Untitled")
+            duration = _format_duration(it.get("duration"))
+            channel = it.get("uploader") or it.get("channel", "YouTube")
+            views = _format_count(it.get("view_count"))
+            url = f"https://youtu.be/{vid_id}"
+
+            text = (
+                f"🎬 <b><a href='{url}'>{title}</a></b>\n\n"
+                f"⏱ <b>Duration:</b> <code>{duration}</code>\n"
+                f"👤 <b>Channel:</b> <code>{channel}</code>\n"
+                f"👁 <b>Views:</b> <code>{views}</code>\n\n"
+                f"<i>• Download Audio:</i> <code>.ytmp3 {vid_id}</code>\n"
+                f"<i>• Download Video:</i> <code>.ytdl {vid_id}</code>"
+            )
+
+            buttons = [
+                [
+                    custom.Button.url("🎬 Open YouTube", url),
+                    custom.Button.inline("ℹ️ Download Hint", f"yt_hint:{vid_id}".encode("utf-8")),
+                ]
+            ]
+
+            res = builder.article(
+                title=title,
+                description=f"⏱ {duration} | 👤 {channel} | 👁 {views} views",
+                text=text,
+                buttons=buttons,
+                parse_mode="html",
+            )
+            results.append(res)
+
+        await iq.answer(results, cache_time=0)
+
+    @Altruix.bot.on_callback_query(filters.regex(r"^yt_hint:(\w+)"))
+    async def yt_hint_callback_handler(c, cq):
+        m = re.match(r"^yt_hint:(\w+)", cq.data.decode("utf-8") if isinstance(cq.data, bytes) else str(cq.data))
+        vid_id = m.group(1) if m else ""
+        await cq.answer(f"🎵 Run .ytmp3 {vid_id} for audio or .ytdl {vid_id} for video!", alert=True)
+
