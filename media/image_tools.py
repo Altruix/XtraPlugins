@@ -497,7 +497,12 @@ async def logo_gen(c: Client, m: Message):
         def _render():
             assets_path = Path(__file__).resolve().parents[1] / "assets"
             blank_img_path = assets_path / "images" / "blank_black.png"
+            if not blank_img_path.exists():
+                blank_img_path = Path(__file__).resolve().parents[2] / "Main" / "assets" / "images" / "blank_black.png"
+
             font_path = assets_path / "fonts" / "Streamster.ttf"
+            if not font_path.exists():
+                font_path = Path(__file__).resolve().parents[2] / "Main" / "assets" / "fonts" / "Streamster.ttf"
 
             if blank_img_path.exists():
                 img = Image.open(blank_img_path).convert("RGBA")
