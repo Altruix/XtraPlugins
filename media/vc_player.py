@@ -33,11 +33,14 @@ try:
 except ImportError:
     HAS_YTDL = False
 
+import logging
+logger = logging.getLogger("altruix.vc_player")
+
 try:
-    from pytgcalls import PyTgCalls
-    from pytgcalls.types import AudioPiped, AudioVideoPiped
+    from pytgcalls import PyTgCalls, types as pytg_types
+    from pytgcalls.types import MediaStream, AudioQuality, VideoQuality, GroupCallConfig
     HAS_PYTGCALLS = True
-except ImportError:
+except (ImportError, Exception):
     HAS_PYTGCALLS = False
 
 
@@ -111,7 +114,123 @@ class VCQueueManager:
         return len(q)
 
 
+class PyTgCallsManager:
+    """Manages active WebRTC group calls and streaming sessions via py-tgcalls 3.0."""
+
+    def __init__(self):
+        self._call_client: Optional[Any] = None
+        self._started: bool = False
+        self._lock = asyncio.Lock()
+
+    async def get_client(self, c: Client) -> Optional[Any]:
+        if not HAS_PYTGCALLS:
+            return None
+        async with self._lock:
+            if self._call_client is None:
+                self._call_client = PyTgCalls(c)
+
+                @self._call_client.on_update()
+                async def _on_stream_update(call_app, update):
+                    if isinstance(update, pytg_types.StreamEnded):
+                        chat_id = update.chat_id
+                        nxt = vc_queue.next_track(chat_id)
+                        if nxt:
+                            try:
+                                await self.play_track(c, chat_id, nxt)
+                            except Exception as err:
+                                logger.error(f"Error playing next queued track in {chat_id}: {err}")
+                        else:
+                            try:
+                                await self._call_client.leave_call(chat_id)
+                            except Exception:
+                                pass
+
+            if not self._started:
+                try:
+                    await self._call_client.start()
+                    self._started = True
+                except Exception as err:
+                    if "already running" in str(err).lower():
+                        self._started = True
+                    else:
+                        logger.error(f"Failed to start PyTgCalls engine: {err}")
+            return self._call_client
+
+    async def play_track(self, c: Client, chat_id: int, track: Track) -> bool:
+        client = await self.get_client(c)
+        if not client:
+            return False
+
+        source = track.file_path or track.stream_url or track.web_url
+        if track.is_video:
+            media = MediaStream(
+                source,
+                audio_parameters=AudioQuality.HIGH,
+                video_parameters=VideoQuality.HD_720p,
+            )
+        else:
+            media = MediaStream(
+                source,
+                audio_parameters=AudioQuality.HIGH,
+                video_flags=MediaStream.Flags.IGNORE,
+            )
+
+        config = GroupCallConfig(auto_start=True)
+        await client.play(chat_id, media, config=config)
+        vc_queue.set_current(chat_id, track)
+        try:
+            full = await c(GetFullChannelRequest(chat_id))
+            if full.full_chat.call:
+                await c(EditGroupCallTitleRequest(call=full.full_chat.call, title=f"🎶 {track.title[:50]}"))
+        except Exception:
+            pass
+        return True
+
+    async def pause(self, c: Client, chat_id: int) -> bool:
+        client = await self.get_client(c)
+        if client:
+            try:
+                await client.pause(chat_id)
+                vc_queue.is_paused[chat_id] = True
+                return True
+            except Exception as e:
+                logger.error(f"Failed to pause VC call in {chat_id}: {e}")
+        return False
+
+    async def resume(self, c: Client, chat_id: int) -> bool:
+        client = await self.get_client(c)
+        if client:
+            try:
+                await client.resume(chat_id)
+                vc_queue.is_paused[chat_id] = False
+                return True
+            except Exception as e:
+                logger.error(f"Failed to resume VC call in {chat_id}: {e}")
+        return False
+
+    async def leave(self, c: Client, chat_id: int) -> bool:
+        client = await self.get_client(c)
+        if client:
+            try:
+                await client.leave_call(chat_id)
+            except Exception:
+                pass
+        vc_queue.clear(chat_id)
+        return True
+
+    async def change_volume(self, c: Client, chat_id: int, volume: int) -> bool:
+        client = await self.get_client(c)
+        if client:
+            try:
+                await client.change_volume_call(chat_id, volume)
+                return True
+            except Exception as e:
+                logger.error(f"Failed to change VC volume in {chat_id}: {e}")
+        return False
+
+
 vc_queue = VCQueueManager()
+tgcalls_manager = PyTgCallsManager()
 active_calls: Dict[int, Any] = {}
 
 
@@ -237,14 +356,21 @@ async def vc_play_stream(c: Client, m: Message):
     curr = vc_queue.get_current(target_chat)
     if not curr:
         # Start immediately
-        vc_queue.set_current(target_chat, track)
         mode_badge = "🎬 Video Stream" if track.is_video else "🎧 Audio Stream"
+        if HAS_PYTGCALLS:
+            try:
+                await tgcalls_manager.play_track(c, target_chat, track)
+            except Exception as e:
+                return await msg.edit_msg(f"❌ WebRTC Playback Error: <code>{e}</code>")
+        else:
+            vc_queue.set_current(target_chat, track)
+
         report = (
             f"▶️ <b>Started {mode_badge} in Voice Chat:</b>\n\n"
             f"📌 <b>Title:</b> <a href='{track.web_url}'>{track.title}</a>\n"
             f"⏱ <b>Duration:</b> <code>{_format_time(track.duration)}</code>\n"
             f"👤 <b>Requested by:</b> <code>{track.requester}</code>\n\n"
-            f"<i>Control playback with <code>.pause</code>, <code>.skip</code>, <code>.queue</code>, <code>.stop</code></i>"
+            f"<i>Control playback with <code>.pause</code>, <code>.skip</code>, <code>.queue</code>, <code>.stop</code>, <code>.volume</code></i>"
         )
         await msg.edit_msg(report, disable_web_page_preview=True)
     else:
@@ -282,7 +408,14 @@ async def vc_direct_stream(c: Client, m: Message):
         is_live=True,
     )
 
-    vc_queue.set_current(target_chat, track)
+    try:
+        if HAS_PYTGCALLS:
+            await tgcalls_manager.play_track(c, target_chat, track)
+        else:
+            vc_queue.set_current(target_chat, track)
+    except Exception as e:
+        return await m.handle_message(f"❌ Failed to stream live audio: <code>{e}</code>")
+
     report = (
         f"📻 <b>Live Stream Started in Voice Chat:</b>\n\n"
         f"🔗 <b>Source:</b> <code>{url[:60]}...</code>\n"
@@ -338,12 +471,19 @@ async def vc_skip_track(c: Client, m: Message):
     nxt = vc_queue.next_track(target_chat)
 
     if nxt:
+        if HAS_PYTGCALLS:
+            try:
+                await tgcalls_manager.play_track(c, target_chat, nxt)
+            except Exception as e:
+                return await m.handle_message(f"❌ Failed to stream next track: <code>{e}</code>")
         await m.handle_message(
             f"⏭ <b>Skipped! Now playing:</b>\n"
             f"📌 <a href='{nxt.web_url}'>{nxt.title}</a> (<code>{_format_time(nxt.duration)}</code>)",
             disable_web_page_preview=True,
         )
     else:
+        if HAS_PYTGCALLS:
+            await tgcalls_manager.leave(c, target_chat)
         await m.handle_message("⏹ <b>Queue ended. Voice Chat stream stopped.</b>")
 
 
@@ -361,7 +501,13 @@ async def vc_pause_resume(c: Client, m: Message):
         return await m.handle_message("❌ Nothing is currently streaming in Voice Chat.")
 
     is_pause_cmd = "pause" in m.text.lower()
-    vc_queue.is_paused[target_chat] = is_pause_cmd
+    if HAS_PYTGCALLS:
+        if is_pause_cmd:
+            await tgcalls_manager.pause(c, target_chat)
+        else:
+            await tgcalls_manager.resume(c, target_chat)
+    else:
+        vc_queue.is_paused[target_chat] = is_pause_cmd
 
     if is_pause_cmd:
         await m.handle_message("⏸ <b>Voice Chat playback paused.</b> (Use <code>.resume</code> to continue)")
@@ -378,8 +524,36 @@ async def vc_pause_resume(c: Client, m: Message):
 )
 async def vc_stop_stream(c: Client, m: Message):
     target_chat = m.chat_id or getattr(m.chat, "id", None)
+    if HAS_PYTGCALLS:
+        await tgcalls_manager.leave(c, target_chat)
     vc_queue.clear(target_chat)
     await m.handle_message("⏹ <b>Voice Chat stream stopped & playlist cleared.</b>")
+
+
+@Altruix.register_on_cmd(
+    ["volume", "vcvol"],
+    cmd_help={
+        "help": "Adjust playback volume in Voice Chat (1-200%).",
+        "example": "volume 75\nvolume 150",
+    },
+    requires_input=True,
+)
+async def vc_change_volume(c: Client, m: Message):
+    target_chat = m.chat_id or getattr(m.chat, "id", None)
+    raw = (m.user_input or "").strip()
+    try:
+        vol = int(raw)
+        if not (1 <= vol <= 200):
+            return await m.handle_message("❌ Volume must be between 1 and 200.")
+    except ValueError:
+        return await m.handle_message("❌ Please provide a valid integer volume (1-200).")
+
+    if HAS_PYTGCALLS:
+        ok = await tgcalls_manager.change_volume(c, target_chat, vol)
+        if ok:
+            return await m.handle_message(f"🔊 <b>Voice Chat volume set to {vol}%.</b>")
+
+    await m.handle_message(f"🔊 Volume target set to {vol}%.")
 
 
 @Altruix.register_on_cmd(
