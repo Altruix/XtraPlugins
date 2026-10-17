@@ -61,10 +61,10 @@ def _get_ffmpeg_cmd() -> Optional[str]:
 
 
 @Altruix.register_on_cmd(
-    ["ytdl", "ytvideo", "ytv"],
+    ["ytdl", "ytvideo", "ytv", "dl", "download", "ig", "reel", "tiktok", "tt", "twitter", "tw", "reddit", "pin", "pinterest", "fb"],
     cmd_help={
-        "help": "Download high quality videos from YouTube and supported web platforms with streaming metadata.",
-        "example": "ytdl https://youtu.be/... -720p\nytdl lofi hip hop -480p",
+        "help": "Universal Social Media & Video Downloader: YouTube, Instagram Reels, TikTok, Twitter/X, Reddit, Pinterest, Facebook.",
+        "example": "dl https://www.instagram.com/reel/...\ndl https://vm.tiktok.com/...\ndl https://x.com/.../status/...\nytdl lofi hip hop -720p",
     },
     requires_input=True,
 )
@@ -82,7 +82,7 @@ async def youtube_download_video(c: Client, m: Message):
 
     query = raw.strip()
     if not query:
-        return await m.handle_message("❌ Please provide a video URL or search query.")
+        return await m.handle_message("❌ Please provide a media URL (YouTube, Instagram, TikTok, X, Reddit, etc.) or search query.")
 
     msg = await m.handle_message(f"🔍 Searching & extracting video (Quality: <b>{quality}p</b>)...")
     out_dir = os.path.join("temp", "xtra_ytdl")
@@ -144,9 +144,26 @@ async def youtube_download_video(c: Client, m: Message):
 
         await msg.edit_msg(f"⬆️ Uploading <b>{title}</b> ({file_size_mb:.1f} MB)...")
 
+        platform_badge = "🎬 Video"
+        low = web_url.lower()
+        if "instagram.com" in low:
+            platform_badge = "📸 Instagram Reel/Post"
+        elif "tiktok.com" in low:
+            platform_badge = "🎵 TikTok Clip"
+        elif "x.com" in low or "twitter.com" in low:
+            platform_badge = "🐦 Twitter/X Media"
+        elif "reddit.com" in low:
+            platform_badge = "🤖 Reddit Video"
+        elif "pinterest.com" in low:
+            platform_badge = "📌 Pinterest Pin"
+        elif "facebook.com" in low or "fb.watch" in low:
+            platform_badge = "📘 Facebook Video"
+        elif "youtube.com" in low or "youtu.be" in low:
+            platform_badge = "▶️ YouTube Video"
+
         caption = (
-            f"🎬 <b><a href='{web_url}'>{title}</a></b>\n"
-            f"⏱ <b>Duration:</b> <code>{_format_duration(duration)}</code> | <b>Channel:</b> <code>{channel}</code>"
+            f"<b>{platform_badge}:</b> <a href='{web_url}'>{title}</a>\n"
+            f"⏱ <b>Duration:</b> <code>{_format_duration(duration)}</code> | 👤 <b>Author:</b> <code>{channel}</code>"
         )
 
         target_chat = m.chat_id or getattr(m.chat, "id", None)
