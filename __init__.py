@@ -18,7 +18,6 @@ Comprehensive modular toolbox structured into 5 specialized categories:
    - ocr_tools: Multi-language optical text recognition, local Tesseract, and custom AI OCR endpoints.
    - quote_tools: Telegram-style speech bubble sticker and photo generator (@QuotLy alternative).
    - scanner_tools: CamScanner-style document thresholding and contrast enhancer.
-   - vc_player: Voice Chat streaming engine with queue management, live streams, and native VC call administration.
    - video_tools: Trim, audio extraction (MP3), mute, video-to-GIF, media info inspection.
    - ytdl_tools: YouTube/web video downloader, 320kbps MP3 audio extractor, search, and technical inspection.
 
@@ -60,3 +59,4 @@ Comprehensive modular toolbox structured into 5 specialized categories:
 """
 
 __version__ = "2.0.0"
+
