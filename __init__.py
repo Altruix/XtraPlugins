@@ -56,7 +56,10 @@ Comprehensive modular toolbox structured into 5 specialized categories:
    - travel_tools: Train schedules, live railway status, and flight tracking.
    - weather_tools: Live meteorological weather conditions, forecasts, and UV/humidity metrics.
    - web_tools: Webpage screenshots, DNS DoH resolution, RDAP/WHOIS, URL unshortener.
+
+6. Bot-Based (botbased/):
+   - fban: Multi-federation ban (.fban), unban (.unfban), federation registry (.fadd, .frem, .flist), and Rose bot converser.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 

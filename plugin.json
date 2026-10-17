@@ -34,6 +34,12 @@
       "path": "lifestyle",
       "description": "Calendar, static maps, turn-by-turn routing, transit tracker, and todo manager",
       "dependencies": ["httpx", "geopy"]
+    },
+    "botbased": {
+      "name": "Bot-Based Federations & Automations",
+      "path": "botbased",
+      "description": "Multi-federation ban and unban automation conversing with Rose bot across multiple federations",
+      "dependencies": []
     }
   },
   "min_altruix_version": "1.0.0"
